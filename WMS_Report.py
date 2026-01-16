@@ -14,8 +14,9 @@ def check_password():
     
     if not st.session_state.authenticated:
         st.title("🔒 Login")
-        password = st.text_input("Enter password:", type="password")
-        if st.button("Login"):
+        password = st.text_input("Enter password:", type="password", key="password_input")
+    
+        if password:
             if password == st.secrets["password"]:
                 st.session_state.authenticated = True
                 st.rerun()
@@ -403,3 +404,4 @@ try:
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.info("Make sure the Google Sheet is shared as 'Anyone with the link can view'")
+
