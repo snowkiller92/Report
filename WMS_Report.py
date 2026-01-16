@@ -1,86 +1,109 @@
 import streamlit as st
 import pandas as pd
-from openpyxl import load_workbook
-from openpyxl.utils import column_index_from_string
+from datetime import timedelta
 
 st.set_page_config(page_title="WMS Performance Report", layout="wide")
 
-
 st.title("📦 WMS Performance Report")
 
-uploaded_file = st.file_uploader("Upload WMS Report", type=["xlsx"])
+uploaded_file = st.file_uploader("Upload WMS Raw Data Export", type=["xlsx", "csv"])
 
 if uploaded_file:
-    wb = load_workbook(uploaded_file, data_only=True)
-    sheet = wb['Sheet2']
+    # Read raw data
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file, sheet_name='Input')
     
-    # Get Picker table (MV38:ND47)
-    mv_col = column_index_from_string('MV')
-    nd_col = column_index_from_string('ND')
+    # Convert date columns
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+    df['Action start'] = pd.to_datetime(df['Action start'])
+    df['Action completion'] = pd.to_datetime(df['Action completion'])
     
-    # Headers
-    headers = []
-    for col in range(mv_col, nd_col + 1):
-        val = sheet.cell(row=38, column=col).value
-        headers.append(val if val else '')
+    # Date selector
+    unique_dates = sorted(df['Date'].unique())
+    selected_date = st.selectbox("📅 Select Date", unique_dates, format_func=lambda x: x.strftime("%d/%m"))
     
-    # Data rows
-    data = []
-    for row in range(39, 48):
-        row_data = []
-        for col in range(mv_col, nd_col + 1):
-            val = sheet.cell(row=row, column=col).value
-            row_data.append(val if val is not None else '')
-        if row_data[0]:  # Only add if there's a picker name
-            data.append(row_data)
+    # Filter by date
+    day_df = df[df['Date'] == selected_date].copy()
     
-    df = pd.DataFrame(data, columns=headers)
+    # Calculate Kilograms per row
+    def calc_kg(row):
+        if str(row['Unit']).upper() == 'KILOGRAM':
+            return row['Quantity']
+        elif pd.notna(row['Reporting Unit']) and str(row['Reporting Unit']).upper() == 'KILOGRAM':
+            return row['Quantity'] * row['Relationship']
+        return 0
     
-    # Get statistics
-    date_val = sheet.cell(row=60, column=367).value
-    total_picking_time = sheet.cell(row=63, column=361).value
-    total_requests = sheet.cell(row=63, column=362).value
-    avg_requests_min = sheet.cell(row=63, column=363).value
-    total_kg = sheet.cell(row=63, column=364).value
-    total_l = sheet.cell(row=63, column=365).value
-    avg_kg_min = sheet.cell(row=63, column=366).value
-    avg_l_min = sheet.cell(row=63, column=367).value
-    avg_per_min = sheet.cell(row=63, column=368).value
-    picking_finish = sheet.cell(row=67, column=362).value
+    # Calculate Liters per row
+    def calc_l(row):
+        if str(row['Unit']).upper() == 'LITER':
+            return row['Quantity']
+        elif pd.notna(row['Reporting Unit']) and str(row['Reporting Unit']).upper() == 'LITER':
+            return row['Quantity'] * row['Relationship']
+        return 0
     
-    # Helper function to convert time to seconds
-    def time_to_seconds(x):
-        try:
-            if pd.isna(x) or x == '':
-                return 0
-            if hasattr(x, 'hour'):  # datetime.time object
-                return x.hour * 3600 + x.minute * 60 + x.second
-            # String format "H:MM:SS"
-            parts = str(x).split(':')
-            return sum(int(i) * 60**(2-idx) for idx, i in enumerate(parts))
-        except:
-            return 0
+    day_df['Kg'] = day_df.apply(calc_kg, axis=1)
+    day_df['Liters'] = day_df.apply(calc_l, axis=1)
     
-    # Find max values for progress bars
-    max_time = df['Picking Time'].apply(time_to_seconds).max()
-    max_requests = df['Requests fulfilled'].apply(lambda x: float(x) if x and not pd.isna(x) else 0).max()
-    max_kg = df['Kilograms'].apply(lambda x: float(x) if x and not pd.isna(x) else 0).max()
-    max_l = df['Liters'].apply(lambda x: float(x) if x and not pd.isna(x) else 0).max()
+    # Get unique actions with their times
+    unique_actions = day_df.groupby(['Name', 'Action Code']).agg({
+        'Action start': 'first',
+        'Action completion': 'first'
+    }).reset_index()
+    unique_actions['picking_time'] = unique_actions['Action completion'] - unique_actions['Action start']
+    
+    # Aggregate per picker
+    picker_times = unique_actions.groupby('Name')['picking_time'].sum().reset_index()
+    
+    # Aggregate other metrics per picker
+    picker_stats = day_df.groupby('Name').agg({
+        'Code': 'count',  # Requests fulfilled (row count)
+        'Kg': 'sum',
+        'Liters': 'sum'
+    }).reset_index()
+    picker_stats.columns = ['Name', 'Requests fulfilled', 'Kilograms', 'Liters']
+    
+    # Merge with picking times
+    report = picker_stats.merge(picker_times, on='Name')
+    
+    # Calculate per-minute metrics
+    report['picking_minutes'] = report['picking_time'].dt.total_seconds() / 60
+    report['Requests per minute'] = report['Requests fulfilled'] / report['picking_minutes']
+    report['Kg per min'] = report['Kilograms'] / report['picking_minutes']
+    report['L per min'] = report['Liters'] / report['picking_minutes']
+    report['Avg per min'] = report['Kg per min'] + report['L per min']
+    
+    # Format picking time for display
+    def format_timedelta(td):
+        total_seconds = int(td.total_seconds())
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    
+    report['Picking Time'] = report['picking_time'].apply(format_timedelta)
+    
+    # Reorder columns
+    report = report[['Name', 'Picking Time', 'Requests fulfilled', 'Requests per minute', 
+                     'Kilograms', 'Liters', 'Kg per min', 'L per min', 'Avg per min', 'picking_time', 'picking_minutes']]
+    
+    # Calculate max values for progress bars
+    max_time = report['picking_time'].max().total_seconds()
+    max_requests = report['Requests fulfilled'].max()
+    max_kg = report['Kilograms'].max()
+    max_l = report['Liters'].max()
     
     # Color function for Avg per min
     def get_avg_color(val):
-        try:
-            v = float(val)
-            if v >= 10:
-                return '#90EE90'  # Green
-            elif v >= 7:
-                return '#FFFF00'  # Yellow
-            elif v >= 5:
-                return '#FFA500'  # Orange
-            else:
-                return '#FF6B6B'  # Red
-        except:
-            return '#FFFFFF'
+        if val >= 10:
+            return '#90EE90'  # Green
+        elif val >= 7:
+            return '#FFFF00'  # Yellow
+        elif val >= 5:
+            return '#FFA500'  # Orange
+        else:
+            return '#FF6B6B'  # Red
     
     # Build HTML table
     html = '''
@@ -166,95 +189,89 @@ if uploaded_file:
     </style>
     '''
     
-    html += '<table class="wms-table">'
+    headers = ['Picker', 'Picking Time', 'Requests fulfilled', 'Requests per minute', 
+               'Kilograms', 'Liters', 'Kg per min', 'L per min', 'Avg per min']
     
-    # Header row
+    html += '<table class="wms-table">'
     html += '<tr>'
     for h in headers:
         html += f'<th>{h}</th>'
     html += '</tr>'
     
-    # Data rows
-    for idx, row in df.iterrows():
+    for _, row in report.iterrows():
         html += '<tr>'
-        for col_idx, (col_name, val) in enumerate(row.items()):
-            if col_name == 'Picker':
-                html += f'<td class="picker-name">{val}</td>'
-            elif col_name == 'Picking Time':
-                # Blue progress bar
-                try:
-                    time_secs = time_to_seconds(val)
-                    pct = (time_secs / max_time * 100) if max_time > 0 else 0
-                    # Format display
-                    if hasattr(val, 'seconds'):
-                        display_val = f"{val.seconds // 3600}:{(val.seconds % 3600) // 60:02d}:{val.seconds % 60:02d}"
-                    else:
-                        display_val = str(val).replace("0 days ", "")
-                except:
-                    pct = 0
-                    display_val = val
-                html += f'''<td class="progress-cell">
-                    <div class="progress-bar" style="width: {pct}%; background-color: #C65B5B;"></div>
-                    <div class="progress-text">{display_val}</div>
-                </td>'''
-            elif col_name == 'Requests fulfilled':
-                try:
-                    pct = (float(val) / max_requests * 100) if max_requests > 0 else 0
-                except:
-                    pct = 0
-                html += f'''<td class="progress-cell">
-                    <div class="progress-bar" style="width: {pct}%; background-color: #5B9BD5;"></div>
-                    <div class="progress-text">{int(float(val)) if val else ""}</div>
-                </td>'''
-            elif col_name == 'Requests per minute':
-                try:
-                    html += f'<td>{float(val):.2f}</td>'
-                except:
-                    html += f'<td>{val}</td>'
-            elif col_name == 'Kilograms':
-                try:
-                    pct = (float(val) / max_kg * 100) if max_kg > 0 else 0
-                except:
-                    pct = 0
-                html += f'''<td class="progress-cell">
-                    <div class="progress-bar" style="width: {pct}%; background-color: #FFC000;"></div>
-                    <div class="progress-text">{float(val):.2f}</div>
-                </td>'''
-            elif col_name == 'Liters':
-                try:
-                    pct = (float(val) / max_l * 100) if max_l > 0 else 0
-                except:
-                    pct = 0
-                html += f'''<td class="progress-cell">
-                    <div class="progress-bar" style="width: {pct}%; background-color: #70AD47;"></div>
-                    <div class="progress-text">{float(val):.2f}</div>
-                </td>'''
-            elif col_name in ['Kg per min', 'L per min']:
-                try:
-                    html += f'<td>{float(val):.2f}</td>'
-                except:
-                    html += f'<td>{val}</td>'
-            elif col_name == 'Avg per min':
-                color = get_avg_color(val)
-                try:
-                    html += f'<td style="background-color: {color}; font-weight: bold;">{float(val):.3f}</td>'
-                except:
-                    html += f'<td style="background-color: {color};">{val}</td>'
-            else:
-                html += f'<td>{val}</td>'
+        
+        # Picker name
+        html += f'<td class="picker-name">{row["Name"]}</td>'
+        
+        # Picking Time with progress bar
+        pct = (row['picking_time'].total_seconds() / max_time * 100) if max_time > 0 else 0
+        html += f'''<td class="progress-cell">
+            <div class="progress-bar" style="width: {pct}%; background-color: #C65B5B;"></div>
+            <div class="progress-text">{row["Picking Time"]}</div>
+        </td>'''
+        
+        # Requests fulfilled with progress bar
+        pct = (row['Requests fulfilled'] / max_requests * 100) if max_requests > 0 else 0
+        html += f'''<td class="progress-cell">
+            <div class="progress-bar" style="width: {pct}%; background-color: #5B9BD5;"></div>
+            <div class="progress-text">{int(row["Requests fulfilled"])}</div>
+        </td>'''
+        
+        # Requests per minute
+        html += f'<td>{row["Requests per minute"]:.2f}</td>'
+        
+        # Kilograms with progress bar
+        pct = (row['Kilograms'] / max_kg * 100) if max_kg > 0 else 0
+        html += f'''<td class="progress-cell">
+            <div class="progress-bar" style="width: {pct}%; background-color: #FFC000;"></div>
+            <div class="progress-text">{row["Kilograms"]:.2f}</div>
+        </td>'''
+        
+        # Liters with progress bar
+        pct = (row['Liters'] / max_l * 100) if max_l > 0 else 0
+        html += f'''<td class="progress-cell">
+            <div class="progress-bar" style="width: {pct}%; background-color: #70AD47;"></div>
+            <div class="progress-text">{row["Liters"]:.2f}</div>
+        </td>'''
+        
+        # Kg per min
+        html += f'<td>{row["Kg per min"]:.2f}</td>'
+        
+        # L per min
+        html += f'<td>{row["L per min"]:.2f}</td>'
+        
+        # Avg per min with color
+        color = get_avg_color(row['Avg per min'])
+        html += f'<td style="background-color: {color}; font-weight: bold;">{row["Avg per min"]:.3f}</td>'
+        
         html += '</tr>'
     
     html += '</table>'
     
-    # Format statistics values
-    avg_req_display = f"{float(avg_requests_min):.2f}" if avg_requests_min else ""
-    avg_per_min_display = f"{float(avg_per_min):.2f}" if avg_per_min else ""
+    # Calculate totals for statistics
+    total_picking_time = report['picking_time'].sum()
+    total_picking_time_str = format_timedelta(total_picking_time)
+    total_requests = report['Requests fulfilled'].sum()
+    total_minutes = total_picking_time.total_seconds() / 60
+    avg_requests_min = total_requests / total_minutes if total_minutes > 0 else 0
+    total_kg = report['Kilograms'].sum()
+    total_l = report['Liters'].sum()
+    avg_kg_min = total_kg / total_minutes if total_minutes > 0 else 0
+    avg_l_min = total_l / total_minutes if total_minutes > 0 else 0
+    avg_per_min = avg_kg_min + avg_l_min
+    
+    # Get picking finish time (latest Action completion)
+    picking_finish = day_df['Action completion'].max()
+    picking_finish_str = picking_finish.strftime("%I:%M:%S %p") if pd.notna(picking_finish) else ""
+    
+    date_display = selected_date.strftime("%d/%m")
     
     # Statistics section
     html += f'''
     <div style="margin-top: 40px;">
-        <span class="stats-title">Statistics for {date_val}</span>
-        <span class="date-box" style="margin-left: 300px;">{date_val}</span>
+        <span class="stats-title">Statistics for {date_display}</span>
+        <span class="date-box" style="margin-left: 300px;">{date_display}</span>
     </div>
     <table class="stats-table" style="margin-top: 15px;">
         <tr>
@@ -266,23 +283,23 @@ if uploaded_file:
             <th colspan="3">Avg Per minute</th>
         </tr>
         <tr>
-            <td>{total_picking_time}</td>
-            <td>{total_requests}</td>
-            <td>{avg_req_display}</td>
-            <td>{total_kg}</td>
-            <td>{total_l}</td>
-            <td>{avg_kg_min}</td>
-            <td>{avg_l_min}</td>
-            <td>{avg_per_min_display}</td>
+            <td>{total_picking_time_str}</td>
+            <td>{int(total_requests)}</td>
+            <td>{avg_requests_min:.2f}</td>
+            <td>{total_kg:.2f} Kg</td>
+            <td>{total_l:.2f} L</td>
+            <td>{avg_kg_min:.2f} Kg</td>
+            <td>{avg_l_min:.2f} L</td>
+            <td>{avg_per_min:.2f}</td>
         </tr>
     </table>
     <div style="margin-top: 30px;">
-        <span class="date-box">{date_val}</span>
+        <span class="date-box">{date_display}</span>
     </div>
     <table class="stats-table" style="margin-top: 10px;">
         <tr>
             <th>Picking Finish</th>
-            <td>{picking_finish}</td>
+            <td>{picking_finish_str}</td>
         </tr>
     </table>
     '''
@@ -290,6 +307,4 @@ if uploaded_file:
     st.markdown(html, unsafe_allow_html=True)
 
 else:
-    st.info("👆 Upload your WMS report file")
-
-
+    st.info("👆 Upload your WMS raw data export file")
