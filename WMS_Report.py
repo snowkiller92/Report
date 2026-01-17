@@ -393,25 +393,27 @@ try:
         <span class="stats-title">Statistics for {date_display}</span>
     </div>
     <table class="stats-table" style="margin-top: 15px;">
-        <tr>
-            <th>Total Picking Time</th>
-            <th>Total Requests</th>
-            <th>Avg Requests per minute</th>
-            <th>Total Kg</th>
-            <th>Total L</th>
-            <th colspan="3">Avg Per minute</th>
-        </tr>
-        <tr>
-            <td>{total_picking_time_str}</td>
-            <td>{int(total_requests)}</td>
-            <td>{avg_requests_min:.2f}</td>
-            <td>{total_kg:.2f} Kg</td>
-            <td>{total_l:.2f} L</td>
-            <td>{avg_kg_min:.2f} Kg</td>
-            <td>{avg_l_min:.2f} L</td>
-            <td>{avg_per_min:.2f}</td>
-        </tr>
-    </table>
+            <tr>
+                <th>Total Picking Time</th>
+                <th>Total Requests</th>
+                <th>Avg Requests/min</th>
+                <th>Total Kg</th>
+                <th>Total L</th>
+                <th>Kg/min</th>
+                <th>L/min</th>
+                <th>Combined/min</th>
+            </tr>
+            <tr>
+                <td>{total_picking_time_str}</td>
+                <td>{int(total_requests)}</td>
+                <td>{avg_requests_min:.2f}</td>
+                <td>{total_kg:.2f}</td>
+                <td>{total_l:.2f}</td>
+                <td>{avg_kg_min:.2f}</td>
+                <td>{avg_l_min:.2f}</td>
+                <td>{avg_per_min:.2f}</td>
+            </tr>
+        </table>
     <table class="stats-table" style="margin-top: 15px;">
         <tr>
             <th>Picking Finish</th>
@@ -430,6 +432,7 @@ try:
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.info("Make sure the Google Sheet is shared as 'Anyone with the link can view'")
+
 
 
 
