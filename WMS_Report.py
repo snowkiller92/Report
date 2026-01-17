@@ -389,9 +389,8 @@ try:
     
     # Statistics section
     html += f'''
-    <div style="margin-top: 40px;">
+    <div style="margin-top: 40px; background-color: #F0F0F0; padding: 15px; border-radius: 5px; display: inline-block;">
         <span class="stats-title">Statistics for {date_display}</span>
-        <span class="date-box" style="margin-left: 300px;">{date_display}</span>
     </div>
     <table class="stats-table" style="margin-top: 15px;">
         <tr>
@@ -413,10 +412,7 @@ try:
             <td>{avg_per_min:.2f}</td>
         </tr>
     </table>
-    <div style="margin-top: 30px;">
-        <span class="date-box">{date_display}</span>
-    </div>
-    <table class="stats-table" style="margin-top: 10px;">
+    <table class="stats-table" style="margin-top: 15px;">
         <tr>
             <th>Picking Finish</th>
             <td>{picking_finish_str}</td>
@@ -434,6 +430,7 @@ try:
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.info("Make sure the Google Sheet is shared as 'Anyone with the link can view'")
+
 
 
 
