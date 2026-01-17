@@ -143,8 +143,36 @@ try:
     }).reset_index()
     unique_actions['picking_time'] = unique_actions['Action completion'] - unique_actions['Action start']
     
-    # Aggregate per picker
+    # Aggregate per picker (simple sum for individual picker stats)
     picker_times = unique_actions.groupby('Name')['picking_time'].sum().reset_index()
+    
+    # Calculate TOTAL picking time with overlap handling (like your Excel formula)
+    def calculate_total_time_no_overlap(actions_df):
+        if actions_df.empty:
+            return timedelta(0)
+        
+        # Sort by start time
+        sorted_actions = actions_df.sort_values('Action start').reset_index(drop=True)
+        
+        total_time = timedelta(0)
+        cumulative_end = sorted_actions.iloc[0]['Action start']  # Initialize before first start
+        
+        for _, row in sorted_actions.iterrows():
+            start = row['Action start']
+            end = row['Action completion']
+            
+            # Only count time that doesn't overlap with previous cumulative end
+            effective_start = max(start, cumulative_end)
+            if end > effective_start:
+                total_time += end - effective_start
+            
+            # Update cumulative end
+            cumulative_end = max(cumulative_end, end)
+        
+        return total_time
+    
+    # Calculate non-overlapping total time for statistics
+    total_picking_time_no_overlap = calculate_total_time_no_overlap(unique_actions)
     
     # Aggregate other metrics per picker
     picker_stats = day_df.groupby('Name').agg({
@@ -340,7 +368,7 @@ try:
     html += '</table>'
     
     # Calculate totals for statistics
-    total_picking_time = report['picking_time'].sum()
+    total_picking_time = total_picking_time_no_overlap
     total_picking_time_str = format_timedelta(total_picking_time)
     total_requests = report['Requests fulfilled'].sum()
     total_minutes = total_picking_time.total_seconds() / 60
@@ -404,6 +432,7 @@ try:
 except Exception as e:
     st.error(f"Error loading data: {e}")
     st.info("Make sure the Google Sheet is shared as 'Anyone with the link can view'")
+
 
 
 
